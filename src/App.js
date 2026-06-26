@@ -104,48 +104,73 @@ function PlatformIcon({ platform, size = 20 }) {
 // ─── API CALLS ─────────────────────────────────────────────────────────────
 
 // YouTube via RapidAPI
-async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
-  const videoId = extractYouTubeId(url);
-  if (!videoId) throw new Error("Could not extract YouTube video ID from this link.");
+// async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
+//   const videoId = extractYouTubeId(url);
+//   if (!videoId) throw new Error("Could not extract YouTube video ID from this link.");
 
-  if (isAudioOnly) {
-    // Audio endpoint
-    const response = await fetch(
-      `https://${RAPIDAPI_YT_HOST}/audio?id=${videoId}&ext=mp3`,
-      {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": RAPIDAPI_YT_HOST,
-        },
-        signal: AbortSignal.timeout(60000),
-      }
-    );
-    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
-    const data = await response.json();
-    // Returns { url: "...", ... }
-    if (!data.url) throw new Error("No audio URL returned from YouTube API.");
-    return { status: "stream", url: data.url };
-  } else {
-    // Video endpoint — get available formats
-    const qualityMap = { max: "1080", "1080": "1080", "720": "720", "480": "480", "360": "360" };
-    const q = qualityMap[videoQuality] || "720";
-    const response = await fetch(
-      `https://${RAPIDAPI_YT_HOST}/video?id=${videoId}&ext=mp4&quality=${q}`,
-      {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": RAPIDAPI_YT_HOST,
-        },
-        signal: AbortSignal.timeout(60000),
-      }
-    );
-    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
-    const data = await response.json();
-    if (!data.url) throw new Error("No video URL returned from YouTube API.");
-    return { status: "stream", url: data.url };
-  }
+//   if (isAudioOnly) {
+//     // Audio endpoint
+//     const response = await fetch(
+//       `https://${RAPIDAPI_YT_HOST}/audio?id=${videoId}&ext=mp3`,
+//       {
+//         method: "GET",
+//         headers: {
+//           "x-rapidapi-key": RAPIDAPI_KEY,
+//           "x-rapidapi-host": RAPIDAPI_YT_HOST,
+//         },
+//         signal: AbortSignal.timeout(60000),
+//       }
+//     );
+//     if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+//     const data = await response.json();
+//     // Returns { url: "...", ... }
+//     if (!data.url) throw new Error("No audio URL returned from YouTube API.");
+//     return { status: "stream", url: data.url };
+//   } else {
+//     // Video endpoint — get available formats
+//     const qualityMap = { max: "1080", "1080": "1080", "720": "720", "480": "480", "360": "360" };
+//     const q = qualityMap[videoQuality] || "720";
+//     const response = await fetch(
+//       `https://${RAPIDAPI_YT_HOST}/video?id=${videoId}&ext=mp4&quality=${q}`,
+//       {
+//         method: "GET",
+//         headers: {
+//           "x-rapidapi-key": RAPIDAPI_KEY,
+//           "x-rapidapi-host": RAPIDAPI_YT_HOST,
+//         },
+//         signal: AbortSignal.timeout(60000),
+//       }
+//     );
+//     if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+//     const data = await response.json();
+//     if (!data.url) throw new Error("No video URL returned from YouTube API.");
+//     return { status: "stream", url: data.url };
+//   }
+// }
+
+async function fetchYouTubeMedia({ url, isAudioOnly }) {
+  const encodedUrl = encodeURIComponent(url);
+
+  const response = await fetch(
+    `https://youtube-audio-video-download.p.rapidapi.com/geturl?video_url=${encodedUrl}`,
+    {
+      method: "GET",
+      headers: {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_YT_HOST,
+      },
+      signal: AbortSignal.timeout(60000),
+    }
+  );
+
+  if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+  const data = await response.json();
+
+  // API returns { video_url: "...", audio_url: "..." }
+  const downloadUrl = isAudioOnly ? data.audio_url : data.video_url;
+  if (!downloadUrl) throw new Error("No URL returned from YouTube API.");
+
+  return { status: "stream", url: downloadUrl };
 }
 
 // Everything else via Cobalt on Render
