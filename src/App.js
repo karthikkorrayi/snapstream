@@ -43,18 +43,6 @@ function platformLabel(platform) {
   return map[platform] || "Web";
 }
 
-// function extractYouTubeId(url) {
-//   const patterns = [
-//     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-//     /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
-//   ];
-//   for (const pattern of patterns) {
-//     const match = url.match(pattern);
-//     if (match) return match[1];
-//   }
-//   return null;
-// }
-
 // ─── INLINE SVG BRAND ICONS ────────────────────────────────────────────────
 function YoutubeIcon({ className }) {
   return (
@@ -103,52 +91,33 @@ function PlatformIcon({ platform, size = 20 }) {
 
 // ─── API CALLS ─────────────────────────────────────────────────────────────
 
-// YouTube via RapidAPI
-async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
-  // const videoId = extractYouTubeId(url);
-  // if (!videoId) throw new Error("Could not extract YouTube video ID from this link.");
+// YouTube via RapidAPI — uses full URL directly, no ID extraction needed
+async function fetchYouTubeMedia({ url, isAudioOnly }) {
+  const encodedUrl = encodeURIComponent(url);
 
-  if (isAudioOnly) {
-    // Audio endpoint
-    const response = await fetch(
-      `https://${RAPIDAPI_YT_HOST}/audio?id=${videoId}&ext=mp3`,
-      {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": RAPIDAPI_YT_HOST,
-        },
-        signal: AbortSignal.timeout(60000),
-      }
-    );
-    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
-    const data = await response.json();
-    // Returns { url: "...", ... }
-    if (!data.url) throw new Error("No audio URL returned from YouTube API.");
-    return { status: "stream", url: data.url };
-  } else {
-    // Video endpoint — get available formats
-    const qualityMap = { max: "1080", "1080": "1080", "720": "720", "480": "480", "360": "360" };
-    const q = qualityMap[videoQuality] || "720";
-    const response = await fetch(
-      `https://${RAPIDAPI_YT_HOST}/video?id=${videoId}&ext=mp4&quality=${q}`,
-      {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": RAPIDAPI_YT_HOST,
-        },
-        signal: AbortSignal.timeout(60000),
-      }
-    );
-    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
-    const data = await response.json();
-    if (!data.url) throw new Error("No video URL returned from YouTube API.");
-    return { status: "stream", url: data.url };
-  }
+  const response = await fetch(
+    `https://${RAPIDAPI_YT_HOST}/geturl?video_url=${encodedUrl}`,
+    {
+      method: "GET",
+      headers: {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_YT_HOST,
+      },
+      signal: AbortSignal.timeout(60000),
+    }
+  );
+
+  if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+  const data = await response.json();
+
+  // API returns { video_url: "...", audio_url: "..." }
+  const downloadUrl = isAudioOnly ? data.audio_url : data.video_url;
+  if (!downloadUrl) throw new Error("No URL returned from YouTube API.");
+
+  return { status: "stream", url: downloadUrl };
 }
 
-// Everything else via Cobalt on Render
+// Instagram & Facebook via Cobalt on Render
 async function fetchCobaltMedia({ url, videoQuality, audioFormat, isAudioOnly }) {
   const payload = {
     url,
@@ -173,11 +142,11 @@ async function fetchCobaltMedia({ url, videoQuality, audioFormat, isAudioOnly })
   return data;
 }
 
-// Router — picks the right API based on platform
+// Router — YouTube → RapidAPI, everything else → Cobalt
 async function fetchMedia({ url, videoQuality, audioFormat, isAudioOnly }) {
   const platform = detectPlatform(url);
   if (platform === "youtube") {
-    return fetchYouTubeMedia({ url, videoQuality, isAudioOnly });
+    return fetchYouTubeMedia({ url, isAudioOnly });
   }
   return fetchCobaltMedia({ url, videoQuality, audioFormat, isAudioOnly });
 }
@@ -317,18 +286,20 @@ export default function SnapStream() {
 
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
         msg = "Could not reach the server. It may still be waking up — wait 30 seconds and try again.";
-      } else if (msg.includes("Could not extract")) {
-        msg = "Could not read that YouTube link. Make sure it's a valid youtube.com or youtu.be URL.";
-      } else if (msg.includes("No audio URL") || msg.includes("No video URL")) {
+      } else if (msg.includes("No URL returned") || msg.includes("No audio URL") || msg.includes("No video URL")) {
         msg = "YouTube returned no download link. The video may be age-restricted, private, or unavailable in your region.";
       } else if (msg.includes("rapidapi_403")) {
-        msg = "RapidAPI key issue — check your subscription to the YouTube Audio Video Download API.";
+        msg = "RapidAPI key issue — check your subscription to the YouTube Audio Video Download API on rapidapi.com.";
       } else if (msg.includes("rapidapi_429")) {
         msg = "Monthly free limit reached on YouTube downloads. Try again next month or upgrade the RapidAPI plan.";
       } else if (msg.includes("error.link.unsupported") || msg.includes("http_400")) {
-        msg = "This link isn't supported. Try YouTube, Instagram, Facebook, or TikTok.";
+        msg = "This link isn't supported. Try YouTube, Instagram, or Facebook.";
       } else if (msg.includes("error.link.invalid")) {
         msg = "That doesn't look like a valid video link. Double-check the URL and try again.";
+      } else if (msg.includes("error.link.empty")) {
+        msg = "The link appears to point to an empty or deleted video.";
+      } else if (msg.includes("error.content.too_long")) {
+        msg = "This video is too long to download.";
       } else if (msg.includes("timeout") || msg.includes("timed out")) {
         msg = "Request timed out. Try again — it usually works on the second attempt.";
       } else if (msg.includes("http_5")) {
