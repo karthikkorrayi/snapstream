@@ -1,25 +1,13 @@
 import { useState, useRef, useCallback } from "react";
 import {
-  Download,
-  Clipboard,
-  X,
-  AlertCircle,
-  Music,
-  Video,
-  Zap,
-  Globe,
-  ChevronDown,
-  CheckCircle2,
-  ArrowLeft,
+  Download, Clipboard, X, AlertCircle, Music, Video,
+  Zap, Globe, ChevronDown, CheckCircle2, ArrowLeft,
 } from "lucide-react";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const COBALT_API_BASE = "https://my-cobalt-api-4azx.onrender.com";
-
-// All platforms supported by this Cobalt instance (from /api/serverInfo):
-// youtube, instagram, tiktok, twitter, facebook, reddit, snapchat,
-// pinterest, soundcloud, vimeo, twitch, bilibili, and more.
-const UNSUPPORTED_PLATFORMS = []; // none blocked — server handles them all
+const RAPIDAPI_KEY = "cf79547581msha0ad8b7e56b0853p14f5d2jsne4cc2f72237e";
+const RAPIDAPI_YT_HOST = "youtube-audio-video-download.p.rapidapi.com";
 
 const QUALITY_OPTIONS = [
   { label: "Best Quality", value: "max" },
@@ -49,17 +37,25 @@ function detectPlatform(url) {
 
 function platformLabel(platform) {
   const map = {
-    youtube: "YouTube",
-    instagram: "Instagram",
-    facebook: "Facebook",
-    tiktok: "TikTok",
-    twitter: "X / Twitter",
-    generic: "Web",
+    youtube: "YouTube", instagram: "Instagram", facebook: "Facebook",
+    tiktok: "TikTok", twitter: "X / Twitter", generic: "Web",
   };
   return map[platform] || "Web";
 }
 
-// ─── INLINE SVG BRAND ICONS (replaces lucide brand icons removed in newer versions) ──
+function extractYouTubeId(url) {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// ─── INLINE SVG BRAND ICONS ────────────────────────────────────────────────
 function YoutubeIcon({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -67,7 +63,6 @@ function YoutubeIcon({ className }) {
     </svg>
   );
 }
-
 function InstagramIcon({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -75,7 +70,6 @@ function InstagramIcon({ className }) {
     </svg>
   );
 }
-
 function TikTokIcon({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -83,7 +77,6 @@ function TikTokIcon({ className }) {
     </svg>
   );
 }
-
 function TwitterXIcon({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -91,7 +84,6 @@ function TwitterXIcon({ className }) {
     </svg>
   );
 }
-
 function FacebookIcon({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -99,7 +91,6 @@ function FacebookIcon({ className }) {
     </svg>
   );
 }
-
 function PlatformIcon({ platform, size = 20 }) {
   const cls = size === 20 ? "w-5 h-5" : "w-4 h-4";
   if (platform === "youtube") return <YoutubeIcon className={cls} />;
@@ -110,41 +101,85 @@ function PlatformIcon({ platform, size = 20 }) {
   return <Globe className={cls} />;
 }
 
-// ─── API CALL ──────────────────────────────────────────────────────────────
-async function fetchMedia({ url, videoQuality, audioFormat, isAudioOnly }) {
-  // Only send fields the Cobalt API actually accepts.
-  // "isAudioOnly" is NOT a valid field and causes error.api.invalid_body.
-  // downloadMode: "audio" is the correct way to request audio-only.
+// ─── API CALLS ─────────────────────────────────────────────────────────────
+
+// YouTube via RapidAPI
+async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
+  const videoId = extractYouTubeId(url);
+  if (!videoId) throw new Error("Could not extract YouTube video ID from this link.");
+
+  if (isAudioOnly) {
+    // Audio endpoint
+    const response = await fetch(
+      `https://${RAPIDAPI_YT_HOST}/audio?id=${videoId}&ext=mp3`,
+      {
+        method: "GET",
+        headers: {
+          "x-rapidapi-key": RAPIDAPI_KEY,
+          "x-rapidapi-host": RAPIDAPI_YT_HOST,
+        },
+        signal: AbortSignal.timeout(60000),
+      }
+    );
+    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+    const data = await response.json();
+    // Returns { url: "...", ... }
+    if (!data.url) throw new Error("No audio URL returned from YouTube API.");
+    return { status: "stream", url: data.url };
+  } else {
+    // Video endpoint — get available formats
+    const qualityMap = { max: "1080", "1080": "1080", "720": "720", "480": "480", "360": "360" };
+    const q = qualityMap[videoQuality] || "720";
+    const response = await fetch(
+      `https://${RAPIDAPI_YT_HOST}/video?id=${videoId}&ext=mp4&quality=${q}`,
+      {
+        method: "GET",
+        headers: {
+          "x-rapidapi-key": RAPIDAPI_KEY,
+          "x-rapidapi-host": RAPIDAPI_YT_HOST,
+        },
+        signal: AbortSignal.timeout(60000),
+      }
+    );
+    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+    const data = await response.json();
+    if (!data.url) throw new Error("No video URL returned from YouTube API.");
+    return { status: "stream", url: data.url };
+  }
+}
+
+// Everything else via Cobalt on Render
+async function fetchCobaltMedia({ url, videoQuality, audioFormat, isAudioOnly }) {
   const payload = {
     url,
     videoQuality,
     audioFormat,
     filenameStyle: "pretty",
     downloadMode: isAudioOnly ? "audio" : "auto",
-    youtubeVideoCodec: "h264", // h264 is recommended for phones
+    youtubeVideoCodec: "h264",
   };
-
   const response = await fetch(`${COBALT_API_BASE}/`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(60000),
   });
-
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));
-    const code = errBody?.error?.code || "";
-    throw new Error(code || `http_${response.status}`);
+    throw new Error(errBody?.error?.code || `http_${response.status}`);
   }
-
   const data = await response.json();
-  if (data.status === "error") {
-    throw new Error(data.error?.code || "unknown");
-  }
+  if (data.status === "error") throw new Error(data.error?.code || "unknown");
   return data;
+}
+
+// Router — picks the right API based on platform
+async function fetchMedia({ url, videoQuality, audioFormat, isAudioOnly }) {
+  const platform = detectPlatform(url);
+  if (platform === "youtube") {
+    return fetchYouTubeMedia({ url, videoQuality, isAudioOnly });
+  }
+  return fetchCobaltMedia({ url, videoQuality, audioFormat, isAudioOnly });
 }
 
 // ─── SUB-COMPONENTS ────────────────────────────────────────────────────────
@@ -165,12 +200,7 @@ function Logo() {
 }
 
 function StatusMessage({ step }) {
-  const steps = [
-    "Analyzing link…",
-    "Connecting to stream engine…",
-    "Resolving media metadata…",
-    "Almost there…",
-  ];
+  const steps = ["Analyzing link…", "Connecting to stream engine…", "Resolving media metadata…", "Almost there…"];
   return (
     <div className="flex flex-col items-center gap-3 py-2">
       <div className="relative">
@@ -181,9 +211,7 @@ function StatusMessage({ step }) {
           </div>
         </div>
       </div>
-      <p className="text-sm text-violet-600 font-medium animate-pulse">
-        {steps[step % steps.length]}
-      </p>
+      <p className="text-sm text-violet-600 font-medium animate-pulse">{steps[step % steps.length]}</p>
     </div>
   );
 }
@@ -191,9 +219,7 @@ function StatusMessage({ step }) {
 function QualitySelect({ options, value, onChange, label }) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-        {label}
-      </label>
+      <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">{label}</label>
       <div className="relative">
         <select
           value={value}
@@ -213,9 +239,7 @@ function QualitySelect({ options, value, onChange, label }) {
 function PickerResult({ items, onSelect }) {
   return (
     <div className="space-y-2">
-      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-        Select a stream
-      </p>
+      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Select a stream</p>
       <div className="grid gap-2">
         {items.map((item, i) => (
           <button
@@ -224,16 +248,9 @@ function PickerResult({ items, onSelect }) {
             className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200 hover:border-violet-400 hover:bg-violet-50 transition-all text-left group"
           >
             {item.thumb && (
-              <img
-                src={item.thumb}
-                alt=""
-                className="w-14 h-10 object-cover rounded-lg flex-shrink-0"
-                onError={(e) => (e.target.style.display = "none")}
-              />
+              <img src={item.thumb} alt="" className="w-14 h-10 object-cover rounded-lg flex-shrink-0" onError={(e) => (e.target.style.display = "none")} />
             )}
-            <span className="text-sm text-slate-700 group-hover:text-slate-900 truncate">
-              {item.type || `Stream ${i + 1}`}
-            </span>
+            <span className="text-sm text-slate-700 group-hover:text-slate-900 truncate">{item.type || `Stream ${i + 1}`}</span>
             <Download className="w-4 h-4 text-slate-300 group-hover:text-violet-500 ml-auto flex-shrink-0 transition-colors" />
           </button>
         ))}
@@ -260,10 +277,7 @@ export default function SnapStream() {
   const startLoadingSteps = useCallback(() => {
     setLoadStep(0);
     let step = 0;
-    stepTimerRef.current = setInterval(() => {
-      step += 1;
-      setLoadStep(step);
-    }, 1800);
+    stepTimerRef.current = setInterval(() => { step += 1; setLoadStep(step); }, 1800);
   }, []);
 
   const stopLoadingSteps = useCallback(() => {
@@ -274,24 +288,12 @@ export default function SnapStream() {
     try {
       const text = await navigator.clipboard.readText();
       if (text) setUrl(text.trim());
-    } catch {
-      // Clipboard permission denied
-    }
+    } catch {}
   };
 
   const handleFetch = async () => {
     const trimmed = url.trim();
     if (!trimmed) return;
-
-    // Block unsupported platforms before even calling API
-    const detected = detectPlatform(trimmed);
-    if (UNSUPPORTED_PLATFORMS.includes(detected)) {
-      setError(
-        "Facebook is not supported by the download engine. Try YouTube, Instagram, TikTok, or X (Twitter) instead."
-      );
-      setAppState("error");
-      return;
-    }
 
     setAppState("loading");
     setError("");
@@ -313,23 +315,22 @@ export default function SnapStream() {
       stopLoadingSteps();
       let msg = err.message || "Something went wrong.";
 
-      // Translate API error codes into plain English
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
         msg = "Could not reach the server. It may still be waking up — wait 30 seconds and try again.";
+      } else if (msg.includes("Could not extract")) {
+        msg = "Could not read that YouTube link. Make sure it's a valid youtube.com or youtu.be URL.";
+      } else if (msg.includes("No audio URL") || msg.includes("No video URL")) {
+        msg = "YouTube returned no download link. The video may be age-restricted, private, or unavailable in your region.";
+      } else if (msg.includes("rapidapi_403")) {
+        msg = "RapidAPI key issue — check your subscription to the YouTube Audio Video Download API.";
+      } else if (msg.includes("rapidapi_429")) {
+        msg = "Monthly free limit reached on YouTube downloads. Try again next month or upgrade the RapidAPI plan.";
       } else if (msg.includes("error.link.unsupported") || msg.includes("http_400")) {
-        msg = "This link isn't supported. The download engine works best with YouTube, Instagram, TikTok, and X (Twitter).";
+        msg = "This link isn't supported. Try YouTube, Instagram, Facebook, or TikTok.";
       } else if (msg.includes("error.link.invalid")) {
         msg = "That doesn't look like a valid video link. Double-check the URL and try again.";
-      } else if (msg.includes("error.link.empty")) {
-        msg = "The link appears to point to an empty or deleted video.";
-      } else if (msg.includes("error.content.too_long")) {
-        msg = "This video is too long to download.";
-      } else if (msg.includes("error.api.auth")) {
-        msg = "The download engine needs authentication for this content. Try a different link.";
       } else if (msg.includes("timeout") || msg.includes("timed out")) {
-        msg = "Request timed out after 60 seconds. YouTube can be slow on the free server — try again, it usually works on the second attempt.";
-      } else if (msg.includes("http_400")) {
-        msg = "The server couldn't process this link (400 error). It's likely an unsupported platform or a private/deleted video.";
+        msg = "Request timed out. Try again — it usually works on the second attempt.";
       } else if (msg.includes("http_5")) {
         msg = "The download server ran into an error. Try again in a moment.";
       }
@@ -363,12 +364,10 @@ export default function SnapStream() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-indigo-50/60 flex flex-col items-center justify-start px-4 py-8 font-sans">
-      {/* Ambient blobs */}
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-96 h-64 rounded-full bg-violet-200/40 blur-3xl pointer-events-none" />
       <div className="fixed bottom-0 right-0 w-64 h-64 rounded-full bg-indigo-200/30 blur-3xl pointer-events-none" />
 
       <div className="relative w-full max-w-md">
-        {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <Logo />
           {appState !== "idle" && (
@@ -382,7 +381,6 @@ export default function SnapStream() {
           )}
         </div>
 
-        {/* Card */}
         <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xl shadow-slate-200/60">
 
           {/* ── IDLE ── */}
@@ -394,12 +392,8 @@ export default function SnapStream() {
                   <br />
                   <span className="text-violet-600">and Videos/Audios.</span>
                 </h1>
-                <p className="text-slate-500 text-sm mt-1.5">
-                  {/* Paste any link from Facebook, Instagram. */}
-                </p>
               </div>
 
-              {/* URL input */}
               <div className="space-y-2.5">
                 <div className="relative flex items-center bg-slate-50 border border-slate-200 rounded-xl focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-200 transition-all">
                   <div className="pl-3.5 flex-shrink-0 text-slate-400">
@@ -410,103 +404,63 @@ export default function SnapStream() {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleFetch()}
-                    placeholder="Paste Instagram, or Facebook link…"
+                    placeholder="Paste YouTube, Instagram, or Facebook link…"
                     className="flex-1 bg-transparent text-slate-800 text-sm px-3 py-3.5 focus:outline-none placeholder:text-slate-400 min-w-0"
                     autoComplete="off"
                     autoCapitalize="none"
                   />
                   {url ? (
-                    <button
-                      onClick={() => setUrl("")}
-                      className="pr-3.5 flex-shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
-                    >
+                    <button onClick={() => setUrl("")} className="pr-3.5 flex-shrink-0 text-slate-400 hover:text-slate-600 transition-colors">
                       <X className="w-4 h-4" />
                     </button>
                   ) : (
-                    <button
-                      onClick={handlePaste}
-                      className="pr-3.5 flex-shrink-0 flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-700 font-semibold transition-colors"
-                    >
+                    <button onClick={handlePaste} className="pr-3.5 flex-shrink-0 flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-700 font-semibold transition-colors">
                       <Clipboard className="w-3.5 h-3.5" />
                       Paste
                     </button>
                   )}
                 </div>
 
-                {/* Mode tabs */}
                 <div className="flex gap-1.5 p-1 bg-slate-100 rounded-xl">
                   <button
                     onClick={() => setMode("video")}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                      mode === "video"
-                        ? "bg-white text-violet-700 shadow-sm border border-slate-200"
-                        : "text-slate-500 hover:text-slate-700"
-                    }`}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${mode === "video" ? "bg-white text-violet-700 shadow-sm border border-slate-200" : "text-slate-500 hover:text-slate-700"}`}
                   >
-                    <Video className="w-4 h-4" />
-                    Video
+                    <Video className="w-4 h-4" /> Video
                   </button>
                   <button
                     onClick={() => setMode("audio")}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                      mode === "audio"
-                        ? "bg-white text-violet-700 shadow-sm border border-slate-200"
-                        : "text-slate-500 hover:text-slate-700"
-                    }`}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${mode === "audio" ? "bg-white text-violet-700 shadow-sm border border-slate-200" : "text-slate-500 hover:text-slate-700"}`}
                   >
-                    <Music className="w-4 h-4" />
-                    Audio Only
+                    <Music className="w-4 h-4" /> Audio Only
                   </button>
                 </div>
 
-                {/* Quality/format selector */}
                 {mode === "video" ? (
-                  <QualitySelect
-                    label="Video Quality"
-                    options={QUALITY_OPTIONS}
-                    value={videoQuality}
-                    onChange={setVideoQuality}
-                  />
+                  <QualitySelect label="Video Quality" options={QUALITY_OPTIONS} value={videoQuality} onChange={setVideoQuality} />
                 ) : (
-                  <QualitySelect
-                    label="Audio Format"
-                    options={AUDIO_FORMAT_OPTIONS}
-                    value={audioFormat}
-                    onChange={setAudioFormat}
-                  />
+                  <QualitySelect label="Audio Format" options={AUDIO_FORMAT_OPTIONS} value={audioFormat} onChange={setAudioFormat} />
                 )}
               </div>
 
-              {/* Fetch button */}
               <button
                 onClick={handleFetch}
                 disabled={!canFetch}
-                className={`w-full py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 transition-all ${
-                  canFetch
-                    ? "bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-300 hover:shadow-violet-400 hover:scale-[1.02] active:scale-[0.98]"
-                    : "bg-slate-100 text-slate-400 cursor-not-allowed"
-                }`}
+                className={`w-full py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 transition-all ${canFetch ? "bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-300 hover:shadow-violet-400 hover:scale-[1.02] active:scale-[0.98]" : "bg-slate-100 text-slate-400 cursor-not-allowed"}`}
               >
                 <Download className="w-4 h-4" />
                 Fetch Media
               </button>
 
-              {/* Supported platform badges */}
               <div className="space-y-1.5">
                 <p className="text-center text-xs text-slate-400">Supported platforms</p>
                 <div className="flex items-center justify-center gap-2 flex-wrap">
                   {[
-                    // { label: "YouTube", platform: "youtube" },
+                    { label: "YouTube", platform: "youtube" },
                     { label: "Instagram", platform: "instagram" },
-                    // { label: "TikTok", platform: "tiktok" },
-                    // { label: "X / Twitter", platform: "twitter" },
                     { label: "Facebook", platform: "facebook" },
-                    // { label: "Reddit", platform: "generic" },
                   ].map(({ label, platform: p }) => (
-                    <span
-                      key={p}
-                      className="flex items-center gap-1.5 text-xs text-slate-500 px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200"
-                    >
+                    <span key={p} className="flex items-center gap-1.5 text-xs text-slate-500 px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200">
                       <PlatformIcon platform={p} size={16} />
                       {label}
                     </span>
@@ -522,10 +476,7 @@ export default function SnapStream() {
               <StatusMessage step={loadStep} />
               <div className="w-full">
                 <div className="h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                  <div
-                    className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-1000"
-                    style={{ width: `${Math.min(20 + loadStep * 22, 90)}%` }}
-                  />
+                  <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-1000" style={{ width: `${Math.min(20 + loadStep * 22, 90)}%` }} />
                 </div>
               </div>
               <div className="text-center space-y-1">
@@ -552,30 +503,20 @@ export default function SnapStream() {
                 </div>
               </div>
 
-              {/* Multi-stream picker */}
               {result.status === "picker" && result.picker?.length > 0 && (
                 <PickerResult items={result.picker} onSelect={handleDownload} />
               )}
 
-              {/* Single stream */}
               {(result.status === "stream" || result.status === "redirect" || result.status === "tunnel") && result.url && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-3 p-3 bg-violet-50 rounded-xl border border-violet-200">
                     <div className="w-10 h-10 rounded-lg bg-violet-100 border border-violet-200 flex items-center justify-center flex-shrink-0">
-                      {mode === "audio" ? (
-                        <Music className="w-5 h-5 text-violet-600" />
-                      ) : (
-                        <Video className="w-5 h-5 text-violet-600" />
-                      )}
+                      {mode === "audio" ? <Music className="w-5 h-5 text-violet-600" /> : <Video className="w-5 h-5 text-violet-600" />}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-800">
-                        {mode === "audio" ? "Audio Track Ready" : "Video Ready"}
-                      </p>
+                      <p className="text-sm font-semibold text-slate-800">{mode === "audio" ? "Audio Track Ready" : "Video Ready"}</p>
                       <p className="text-xs text-slate-500">
-                        {mode === "audio"
-                          ? `Format: ${audioFormat.toUpperCase()}`
-                          : `Quality: ${videoQuality === "max" ? "Best available" : videoQuality + "p"}`}
+                        {mode === "audio" ? `Format: ${audioFormat.toUpperCase()}` : `Quality: ${videoQuality === "max" ? "Best available" : videoQuality + "p"}`}
                       </p>
                     </div>
                   </div>
@@ -583,9 +524,7 @@ export default function SnapStream() {
                   {downloadStarted && (
                     <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
                       <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                      <p className="text-xs text-emerald-700">
-                        Download started — check your browser downloads folder.
-                      </p>
+                      <p className="text-xs text-emerald-700">Download started — check your browser downloads folder.</p>
                     </div>
                   )}
 
@@ -599,19 +538,13 @@ export default function SnapStream() {
                 </div>
               )}
 
-              {/* Unknown response fallback */}
               {!["stream", "redirect", "picker", "tunnel"].includes(result.status) && (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
-                  <p className="text-xs text-amber-700">
-                    Unexpected response from server: <code className="font-mono">{result.status}</code>
-                  </p>
+                  <p className="text-xs text-amber-700">Unexpected response: <code className="font-mono">{result.status}</code></p>
                 </div>
               )}
 
-              <button
-                onClick={handleReset}
-                className="w-full py-3 rounded-xl text-sm text-slate-500 hover:text-violet-700 border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-all"
-              >
+              <button onClick={handleReset} className="w-full py-3 rounded-xl text-sm text-slate-500 hover:text-violet-700 border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-all">
                 Download another video
               </button>
             </div>
@@ -627,7 +560,6 @@ export default function SnapStream() {
                   <p className="text-xs text-red-600 leading-relaxed">{error}</p>
                 </div>
               </div>
-
               <div className="space-y-2">
                 <button
                   onClick={() => { setAppState("idle"); setError(""); }}
@@ -635,39 +567,23 @@ export default function SnapStream() {
                 >
                   Try Again
                 </button>
-                <button
-                  onClick={handleReset}
-                  className="w-full py-3 rounded-xl text-sm text-slate-500 hover:text-violet-700 border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-all"
-                >
+                <button onClick={handleReset} className="w-full py-3 rounded-xl text-sm text-slate-500 hover:text-violet-700 border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-all">
                   Start over
                 </button>
               </div>
-
-              {/* Render wake-up hint */}
               {error.includes("waking up") && (
                 <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 space-y-1">
                   <p className="text-xs font-bold text-indigo-700">Server is sleeping 💤</p>
-                  <p className="text-xs text-indigo-600 leading-relaxed">
-                    Render's free tier sleeps after 15 minutes of inactivity. Wait about 30–60 seconds for it to wake up, then try again. This only happens on the first request after a gap.
-                  </p>
+                  <p className="text-xs text-indigo-600 leading-relaxed">Render's free tier sleeps after 15 minutes. Wait 30–60 seconds then try again.</p>
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* Footer */}
         <p className="text-center text-xs text-slate-400 mt-5">
           Powered by{" "}
-          <a
-            href="https://cobalt.tools"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-slate-500 hover:text-violet-600 transition-colors"
-          >
-            KK
-          </a>{" "}
-          {/* · For personal use only · Respect copyright laws */}
+          <a href="https://cobalt.tools" target="_blank" rel="noopener noreferrer" className="text-slate-500 hover:text-violet-600 transition-colors">KK</a>
         </p>
       </div>
     </div>
