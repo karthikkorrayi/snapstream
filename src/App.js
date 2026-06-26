@@ -43,17 +43,17 @@ function platformLabel(platform) {
   return map[platform] || "Web";
 }
 
-function extractYouTubeId(url) {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-    /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
-  ];
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
-}
+// function extractYouTubeId(url) {
+//   const patterns = [
+//     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
+//     /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+//   ];
+//   for (const pattern of patterns) {
+//     const match = url.match(pattern);
+//     if (match) return match[1];
+//   }
+//   return null;
+// }
 
 // ─── INLINE SVG BRAND ICONS ────────────────────────────────────────────────
 function YoutubeIcon({ className }) {
