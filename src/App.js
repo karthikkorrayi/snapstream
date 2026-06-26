@@ -7,7 +7,7 @@ import {
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const COBALT_API_BASE = "https://my-cobalt-api-4azx.onrender.com";
 const RAPIDAPI_KEY = "cf79547581msha0ad8b7e56b0853p14f5d2jsne4cc2f72237e";
-const RAPIDAPI_YT_HOST = "youtube-audio-video-download.p.rapidapi.com";
+const RAPIDAPI_YT_HOST = "youtube-downloader-with-mp3.p.rapidapi.com";
 
 const QUALITY_OPTIONS = [
   { label: "Best Quality", value: "max" },
@@ -92,26 +92,29 @@ function PlatformIcon({ platform, size = 20 }) {
 // ─── API CALLS ─────────────────────────────────────────────────────────────
 
 // YouTube via RapidAPI — uses full URL directly, no ID extraction needed
-async function fetchYouTubeMedia({ url, isAudioOnly }) {
+async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
   const encodedUrl = encodeURIComponent(url);
+  const qualityMap = { max: "720", "1080": "1080", "720": "720", "480": "480", "360": "360" };
+  const q = qualityMap[videoQuality] || "720";
 
-  const response = await fetch(
-    `https://${RAPIDAPI_YT_HOST}/geturl?video_url=${encodedUrl}`,
-    {
-      method: "GET",
-      headers: {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": RAPIDAPI_YT_HOST,
-      },
-      signal: AbortSignal.timeout(60000),
-    }
-  );
+  const endpoint = isAudioOnly
+    ? `https://${RAPIDAPI_YT_HOST}/mp3/mp3-id?url=${encodedUrl}&quality=128`
+    : `https://${RAPIDAPI_YT_HOST}/mp4/mp4?url=${encodedUrl}&quality=${q}`;
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      "x-rapidapi-key": RAPIDAPI_KEY,
+      "x-rapidapi-host": RAPIDAPI_YT_HOST,
+    },
+    signal: AbortSignal.timeout(60000),
+  });
 
   if (!response.ok) throw new Error(`rapidapi_${response.status}`);
   const data = await response.json();
 
-  // API returns { video_url: "...", audio_url: "..." }
-  const downloadUrl = isAudioOnly ? data.audio_url : data.video_url;
+  // Returns { url: "...", ... } for both audio and video
+  const downloadUrl = data?.url || data?.link || data?.download_url;
   if (!downloadUrl) throw new Error("No URL returned from YouTube API.");
 
   return { status: "stream", url: downloadUrl };
