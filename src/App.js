@@ -91,7 +91,6 @@ function PlatformIcon({ platform, size = 20 }) {
 
 // ─── API CALLS ─────────────────────────────────────────────────────────────
 
-// YouTube via RapidAPI — uses full URL directly, no ID extraction needed
 async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
   const match = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   if (!match) throw new Error("Could not extract YouTube video ID from this link.");
@@ -101,7 +100,7 @@ async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
   const quality = qualityMap[videoQuality] || "medium";
 
   if (isAudioOnly) {
-    // MP3 endpoint — /get_mp3_download_link/{videoId}
+    // Audio → /get_mp3_download_link
     const response = await fetch(
       `https://${RAPIDAPI_YT_HOST}/get_mp3_download_link/${videoId}?quality=${quality}&wait_until_the_file_is_ready=true`,
       {
@@ -120,32 +119,25 @@ async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
     return { status: "stream", url: downloadUrl };
 
   } else {
-    // Video — first get video info to find best MP4 download link
-    const infoResponse = await fetch(
-      `https://${RAPIDAPI_YT_HOST}/get-video-info/${videoId}?response_mode=default`,
+    // Video → /get_m4a_download_link (returns direct downloadable video link)
+    const response = await fetch(
+      `https://${RAPIDAPI_YT_HOST}/get_m4a_download_link/${videoId}`,
       {
         method: "GET",
         headers: {
           "x-rapidapi-key": RAPIDAPI_KEY,
           "x-rapidapi-host": RAPIDAPI_YT_HOST,
         },
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(120000),
       }
     );
-    if (!infoResponse.ok) throw new Error(`rapidapi_${infoResponse.status}`);
-    const info = await infoResponse.json();
+    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+    const data = await response.json();
 
-    // Pick best mp4 format from formats array
-    const formats = info?.formats || info?.streamingData?.formats || [];
-    const mp4Formats = formats.filter(f =>
-      (f.mimeType || f.type || "").includes("video/mp4") && f.url
-    );
+    // Log so we can debug if needed
+    console.log("M4A response:", JSON.stringify(data));
 
-    // Sort by quality — pick highest available
-    mp4Formats.sort((a, b) => (b.height || b.quality || 0) - (a.height || a.quality || 0));
-    const best = mp4Formats[0];
-    const downloadUrl = best?.url || info?.url || info?.link;
-
+    const downloadUrl = data?.file || data?.reserved_file || data?.url || data?.link || data?.download_url;
     if (!downloadUrl) throw new Error("No video URL returned from YouTube API.");
     return { status: "stream", url: downloadUrl };
   }
@@ -180,7 +172,7 @@ async function fetchCobaltMedia({ url, videoQuality, audioFormat, isAudioOnly })
 async function fetchMedia({ url, videoQuality, audioFormat, isAudioOnly }) {
   const platform = detectPlatform(url);
   if (platform === "youtube") {
-    return fetchYouTubeMedia({ url, isAudioOnly });
+    return fetchYouTubeMedia({ url, videoQuality, isAudioOnly });
   }
   return fetchCobaltMedia({ url, videoQuality, audioFormat, isAudioOnly });
 }
@@ -320,20 +312,20 @@ export default function SnapStream() {
 
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
         msg = "Could not reach the server. It may still be waking up — wait 30 seconds and try again.";
-      } else if (msg.includes("No URL returned") || msg.includes("No audio URL") || msg.includes("No video URL")) {
-        msg = "YouTube returned no download link. The video may be age-restricted, private, or unavailable in your region.";
+      } else if (msg.includes("No audio URL") || msg.includes("No video URL")) {
+        msg = "YouTube returned no download link. The video may be age-restricted, private, or unavailable.";
+      } else if (msg.includes("Could not extract")) {
+        msg = "Could not read that YouTube link. Make sure it's a valid youtube.com or youtu.be URL.";
       } else if (msg.includes("rapidapi_403")) {
-        msg = "RapidAPI key issue — check your subscription to the YouTube Audio Video Download API on rapidapi.com.";
+        msg = "RapidAPI key issue — check your subscription on rapidapi.com.";
       } else if (msg.includes("rapidapi_429")) {
-        msg = "Monthly free limit reached on YouTube downloads. Try again next month or upgrade the RapidAPI plan.";
+        msg = "Monthly free limit reached on YouTube downloads. Try again next month.";
       } else if (msg.includes("error.link.unsupported") || msg.includes("http_400")) {
         msg = "This link isn't supported. Try YouTube, Instagram, or Facebook.";
       } else if (msg.includes("error.link.invalid")) {
         msg = "That doesn't look like a valid video link. Double-check the URL and try again.";
       } else if (msg.includes("error.link.empty")) {
         msg = "The link appears to point to an empty or deleted video.";
-      } else if (msg.includes("error.content.too_long")) {
-        msg = "This video is too long to download.";
       } else if (msg.includes("timeout") || msg.includes("timed out")) {
         msg = "Request timed out. Try again — it usually works on the second attempt.";
       } else if (msg.includes("http_5")) {
@@ -521,7 +513,7 @@ export default function SnapStream() {
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-slate-800">{mode === "audio" ? "Audio Track Ready" : "Video Ready"}</p>
                       <p className="text-xs text-slate-500">
-                        {mode === "audio" ? `Format: ${audioFormat.toUpperCase()}` : `Quality: ${videoQuality === "max" ? "Best available" : videoQuality + "p"}`}
+                        {mode === "audio" ? `Format: MP3` : `Quality: ${videoQuality === "max" ? "Best available" : videoQuality + "p"}`}
                       </p>
                     </div>
                   </div>
