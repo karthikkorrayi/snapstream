@@ -7,7 +7,7 @@ import {
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const COBALT_API_BASE = "https://my-cobalt-api-4azx.onrender.com";
 const RAPIDAPI_KEY = "cf79547581msha0ad8b7e56b0853p14f5d2jsne4cc2f72237e";
-const RAPIDAPI_YT_HOST = "ytapi.p.rapidapi.com";
+const RAPIDAPI_YT_HOST = "youtube-mp3-audio-video-downloader.p.rapidapi.com";
 
 const QUALITY_OPTIONS = [
   { label: "Best Quality", value: "max" },
@@ -92,53 +92,35 @@ function PlatformIcon({ platform, size = 20 }) {
 // ─── API CALLS ─────────────────────────────────────────────────────────────
 
 // YouTube via RapidAPI — uses full URL directly, no ID extraction needed
-async function fetchYouTubeMedia({ url, isAudioOnly }) {
-  // Extract video ID from any YouTube URL format
+async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
   const match = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   if (!match) throw new Error("Could not extract YouTube video ID from this link.");
   const videoId = match[1];
 
-  if (isAudioOnly) {
-    // /mp3 endpoint — returns direct mp3 link
-    const response = await fetch(
-      `https://${RAPIDAPI_YT_HOST}/mp3?id=${videoId}`,
-      {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": RAPIDAPI_YT_HOST,
-        },
-        signal: AbortSignal.timeout(60000),
-      }
-    );
-    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
-    const data = await response.json();
-    const downloadUrl = data?.url || data?.link || data?.mp3;
-    if (!downloadUrl) throw new Error("No audio URL returned from YouTube API.");
-    return { status: "stream", url: downloadUrl };
+  const qualityMap = { max: "high", "1080": "high", "720": "high", "480": "medium", "360": "low" };
+  const quality = qualityMap[videoQuality] || "medium";
 
-  } else {
-    // /json endpoint — returns video formats, pick best mp4
-    const response = await fetch(
-      `https://${RAPIDAPI_YT_HOST}/json?id=${videoId}`,
-      {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": RAPIDAPI_YT_HOST,
-        },
-        signal: AbortSignal.timeout(60000),
-      }
-    );
-    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
-    const data = await response.json();
-    // Pick first available mp4 format
-    const formats = data?.formats || data?.links || [];
-    const mp4 = formats.find((f) => f.ext === "mp4" || f.mimeType?.includes("video/mp4"));
-    const downloadUrl = mp4?.url || data?.url || data?.link;
-    if (!downloadUrl) throw new Error("No video URL returned from YouTube API.");
-    return { status: "stream", url: downloadUrl };
-  }
+  // wait_until_the_file_is_ready=true → API waits and returns ready link (works up to 15 min videos)
+  const endpoint = isAudioOnly
+    ? `https://${RAPIDAPI_YT_HOST}/dl/${videoId}?quality=${quality}&wait_until_the_file_is_ready=true`
+    : `https://${RAPIDAPI_YT_HOST}/dl/${videoId}?quality=${quality}&wait_until_the_file_is_ready=true`;
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      "x-rapidapi-key": RAPIDAPI_KEY,
+      "x-rapidapi-host": RAPIDAPI_YT_HOST,
+    },
+    signal: AbortSignal.timeout(120000), // 2 min — API can take up to 300s but 120s covers most
+  });
+
+  if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+  const data = await response.json();
+
+  const downloadUrl = data?.file || data?.reserved_file;
+  if (!downloadUrl) throw new Error("No URL returned from YouTube API.");
+
+  return { status: "stream", url: downloadUrl };
 }
 
 // Instagram & Facebook via Cobalt on Render
