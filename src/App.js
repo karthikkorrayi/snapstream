@@ -100,27 +100,55 @@ async function fetchYouTubeMedia({ url, videoQuality, isAudioOnly }) {
   const qualityMap = { max: "high", "1080": "high", "720": "high", "480": "medium", "360": "low" };
   const quality = qualityMap[videoQuality] || "medium";
 
-  // wait_until_the_file_is_ready=true → API waits and returns ready link (works up to 15 min videos)
-  const endpoint = isAudioOnly
-    ? `https://${RAPIDAPI_YT_HOST}/dl/${videoId}?quality=${quality}&wait_until_the_file_is_ready=true`
-    : `https://${RAPIDAPI_YT_HOST}/dl/${videoId}?quality=${quality}&wait_until_the_file_is_ready=true`;
+  if (isAudioOnly) {
+    // MP3 endpoint — /get_mp3_download_link/{videoId}
+    const response = await fetch(
+      `https://${RAPIDAPI_YT_HOST}/get_mp3_download_link/${videoId}?quality=${quality}&wait_until_the_file_is_ready=true`,
+      {
+        method: "GET",
+        headers: {
+          "x-rapidapi-key": RAPIDAPI_KEY,
+          "x-rapidapi-host": RAPIDAPI_YT_HOST,
+        },
+        signal: AbortSignal.timeout(120000),
+      }
+    );
+    if (!response.ok) throw new Error(`rapidapi_${response.status}`);
+    const data = await response.json();
+    const downloadUrl = data?.file || data?.reserved_file || data?.url;
+    if (!downloadUrl) throw new Error("No audio URL returned from YouTube API.");
+    return { status: "stream", url: downloadUrl };
 
-  const response = await fetch(endpoint, {
-    method: "GET",
-    headers: {
-      "x-rapidapi-key": RAPIDAPI_KEY,
-      "x-rapidapi-host": RAPIDAPI_YT_HOST,
-    },
-    signal: AbortSignal.timeout(120000), // 2 min — API can take up to 300s but 120s covers most
-  });
+  } else {
+    // Video — first get video info to find best MP4 download link
+    const infoResponse = await fetch(
+      `https://${RAPIDAPI_YT_HOST}/get-video-info/${videoId}?response_mode=default`,
+      {
+        method: "GET",
+        headers: {
+          "x-rapidapi-key": RAPIDAPI_KEY,
+          "x-rapidapi-host": RAPIDAPI_YT_HOST,
+        },
+        signal: AbortSignal.timeout(60000),
+      }
+    );
+    if (!infoResponse.ok) throw new Error(`rapidapi_${infoResponse.status}`);
+    const info = await infoResponse.json();
 
-  if (!response.ok) throw new Error(`rapidapi_${response.status}`);
-  const data = await response.json();
+    // Pick best mp4 format from formats array
+    const formats = info?.formats || info?.streamingData?.formats || [];
+    const mp4Formats = formats.filter(f =>
+      (f.mimeType || f.type || "").includes("video/mp4") && f.url
+    );
 
-  const downloadUrl = data?.file || data?.reserved_file;
-  if (!downloadUrl) throw new Error("No URL returned from YouTube API.");
+    // Sort by quality — pick highest available
+    mp4Formats.sort((a, b) => (b.height || b.quality || 0) - (a.height || a.quality || 0));
+    const best = mp4Formats[0];
+    const downloadUrl = best?.url || info?.url || info?.link;
 
-  return { status: "stream", url: downloadUrl };
+    if (!downloadUrl) throw new Error("No video URL returned from YouTube API.");
+    return { status: "stream", url: downloadUrl };
+  }
 }
 
 // Instagram & Facebook via Cobalt on Render
